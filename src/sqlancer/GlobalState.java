@@ -1,5 +1,6 @@
 package sqlancer;
 
+import sqlancer.common.genesisql.QueryPool;
 import sqlancer.common.query.Query;
 import sqlancer.common.query.SQLancerResultSet;
 import sqlancer.common.schema.AbstractSchema;
@@ -16,6 +17,7 @@ public abstract class GlobalState<O extends DBMSSpecificOptions<?>, S extends Ab
     private StateToReproduce state;
     private Main.QueryManager<C> manager;
     private String databaseName;
+    private QueryPool queryPool;
 
     public void setConnection(C con) {
         this.databaseConnection = con;
@@ -80,6 +82,18 @@ public abstract class GlobalState<O extends DBMSSpecificOptions<?>, S extends Ab
 
     public void setDatabaseName(String databaseName) {
         this.databaseName = databaseName;
+    }
+    
+    public QueryPool getQueryPool() {
+    	if (queryPool == null) {
+    		queryPool = new QueryPool();
+    	}
+    	
+        return queryPool;
+    }
+
+    public void setQueryPool(QueryPool queryPool) {
+        this.queryPool = queryPool;
     }
 
     private ExecutionTimer executePrologue(Query<?> q) throws Exception {

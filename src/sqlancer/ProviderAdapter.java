@@ -9,6 +9,7 @@ import java.util.stream.Collectors;
 
 import sqlancer.StateToReproduce.OracleRunReproductionState;
 import sqlancer.common.DBMSCommon;
+import sqlancer.common.genesisql.QueryPoolEntry;
 import sqlancer.common.oracle.CompositeTestOracle;
 import sqlancer.common.oracle.TestOracle;
 import sqlancer.common.schema.AbstractSchema;
@@ -25,6 +26,9 @@ public abstract class ProviderAdapter<G extends GlobalState<O, ? extends Abstrac
     int currentSelectRewards;
     int currentSelectCounts;
     int currentMutationOperator = -1;
+    
+    // Variables for GenesiSQL
+    // query pool, ... 
 
     protected ProviderAdapter(Class<G> globalClass, Class<O> optionClass) {
         this.globalClass = globalClass;
@@ -255,4 +259,60 @@ public abstract class ProviderAdapter<G extends GlobalState<O, ? extends Abstrac
         throw new UnsupportedOperationException();
     }
 
+	// GenisiSQL: Entry function
+	@Override
+	public void generateAndTestDatabaseWithGeneticApproach(G globalState) throws Exception {
+		try {
+			// GenesiSQL Step 1. Set up database and oracle
+			generateDatabase(globalState);
+			checkViewsAreValid(globalState);
+			globalState.getManager().incrementCreateDatabase();
+			TestOracle<G> oracle = getTestOracle(globalState);
+
+			// GenesiSQL Step 2. Initialize query pool and HashMap to track unique queries
+			oracle.initialiseQueryPool(globalState);
+			globalState.getQueryPool().printQueryPool();
+			Long totalExecutedQueries = 0L;
+			
+			// Outer loop: for each generation
+			for (int generation = 0; generation < globalState.getOptions().getGenesisqlGenerations(); generation++) {
+				if (totalExecutedQueries >= globalState.getOptions().getNrQueries()) {
+					break;
+				}
+				
+				// Inner loop: for each query in query pool
+				// GenesiSQL Step 3. Fitness Evaluation (with oracle validation)
+				for (QueryPoolEntry entry : globalState.getQueryPool().getQueryPool()) {
+					if (totalExecutedQueries >= globalState.getOptions().getNrQueries()) {
+						break;
+					}
+					
+					try (OracleRunReproductionState localState = globalState.getState().createLocalState()) {
+						assert localState != null;
+						try {
+							oracle.evaluateQueryFitness(entry, globalState);
+							totalExecutedQueries += 1;
+							globalState.getManager().incrementSelectQueryCount();
+						} catch (IgnoreMeException ignored) {
+						} catch (AssertionError e) {
+							Reproducer<G> reproducer = oracle.getLastReproducer();
+							if (reproducer != null) {
+								throw e;
+							}
+						}
+						localState.executedWithoutError();
+					}
+				}
+				
+				// GenesiSQL Step 4. Selection
+				int populationSize = globalState.getOptions().getGenesisqlPopulationSize();
+				globalState.getQueryPool().selectTopNQueries(populationSize);
+				
+				// GenesiSQL Step 5. Crossover and Mutation, and Step 6. Re-insertion
+				// TODO: Implement crossover, mutation, and re-insertion logic
+			}
+		} finally {
+			globalState.getConnection().close();
+		}
+	}
 }

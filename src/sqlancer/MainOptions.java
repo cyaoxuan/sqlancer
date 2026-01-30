@@ -66,6 +66,15 @@ public class MainOptions {
     @Parameter(names = "--qpg-selection-probability", description = "The probability (0-1) of the random selection of mutators. A higher value (>0.5) favors exploration over exploitation. (requires --qpg-enable)")
     private static double qpgProbability = 0.7;
 
+	@Parameter(names = "--genesisql-enable", description = "Enable GenesiSQL, a genetic algorithm based test generation", arity = 1)
+	private boolean enableGenesisql;
+
+	@Parameter(names = "--genesisql-pop-size", description = "The population size for the genetic algorithm")
+	private int genesisqlPopulationSize = 10;
+
+	@Parameter(names = "--genetic-generations", description = "The number of generations to evolve")
+	private int genesisqlGenerations = 50;
+
     @Parameter(names = "--username", description = "The user name used to log into the DBMS")
     private String userName = "sqlancer"; // NOPMD
 
@@ -210,6 +219,18 @@ public class MainOptions {
     public double getQPGProbability() {
         return qpgProbability;
     }
+
+	public boolean enableGenesisql() {
+		return enableGenesisql;
+	}
+
+	public int getGenesisqlPopulationSize() {
+		return genesisqlPopulationSize;
+	}
+
+	public int getGenesisqlGenerations() {
+		return genesisqlGenerations;
+	}
 
     public int getNrQueries() {
         return nrQueries;

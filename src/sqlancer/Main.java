@@ -463,6 +463,8 @@ public final class Main {
                 Reproducer<G> reproducer = null;
                 if (options.enableQPG()) {
                     provider.generateAndTestDatabaseWithQueryPlanGuidance(state);
+				} else if (options.enableGenesisql()) {
+					provider.generateAndTestDatabaseWithGeneticApproach(state);
                 } else {
                     reproducer = provider.generateAndTestDatabase(state);
                 }
