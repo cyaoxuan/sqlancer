@@ -52,17 +52,24 @@ import sqlancer.yugabyte.ysql.YSQLProvider;
 public final class Main {
 
     public static final File LOG_DIRECTORY = new File("logs");
+    public static final File OUTPUT_LOG_FILE = new File(LOG_DIRECTORY, "output.log");
     public static volatile AtomicLong nrQueries = new AtomicLong();
     public static volatile AtomicLong nrDatabases = new AtomicLong();
     public static volatile AtomicLong nrSuccessfulActions = new AtomicLong();
     public static volatile AtomicLong nrUnsuccessfulActions = new AtomicLong();
     public static volatile AtomicLong threadsShutdown = new AtomicLong();
     static boolean progressMonitorStarted;
+    private static FileWriter outputLogWriter;
 
     static {
         System.setProperty(org.slf4j.simple.SimpleLogger.DEFAULT_LOG_LEVEL_KEY, "ERROR");
         if (!LOG_DIRECTORY.exists()) {
             LOG_DIRECTORY.mkdir();
+        }
+        try {
+            outputLogWriter = new FileWriter(OUTPUT_LOG_FILE, true);
+        } catch (IOException e) {
+            throw new AssertionError(e);
         }
     }
 
@@ -773,10 +780,6 @@ public final class Main {
 
     private static synchronized void startProgressMonitor() {
         if (progressMonitorStarted) {
-            /*
-             * it might be already started if, for example, the main method is called multiple times in a test (see
-             * https://github.com/sqlancer/sqlancer/issues/90).
-             */
             return;
         } else {
             progressMonitorStarted = true;
@@ -798,17 +801,38 @@ public final class Main {
                 long currentNrQueries = nrQueries.get();
                 long nrCurrentQueries = currentNrQueries - lastNrQueries;
                 double throughput = nrCurrentQueries / (elapsedTimeMillis / 1000d);
+
                 long currentNrDbs = nrDatabases.get();
                 long nrCurrentDbs = currentNrDbs - lastNrDbs;
                 double throughputDbs = nrCurrentDbs / (elapsedTimeMillis / 1000d);
+
                 long successfulStatementsRatio = (long) (100.0 * nrSuccessfulActions.get()
                         / (nrSuccessfulActions.get() + nrUnsuccessfulActions.get()));
+
+                long allCount = sqlancer.common.oracle.NoRECOracle.allRecordsCountQueries;
+                long zeroCount = sqlancer.common.oracle.NoRECOracle.zeroCountQueries;
+                long globalUniqueCount = sqlancer.common.oracle.NoRECOracle.globalUniqueQueries;
+                double globalUniquePct = currentNrQueries == 0 ? 0.0 : (100.0 * globalUniqueCount / currentNrQueries);
+
+                double allPct = currentNrQueries == 0 ? 0.0 : (100.0 * allCount / currentNrQueries);
+                double zeroPct = currentNrQueries == 0 ? 0.0 : (100.0 * zeroCount / currentNrQueries);
+
                 DateFormat dateFormat = new SimpleDateFormat("yyyy/MM/dd HH:mm:ss");
                 Date date = new Date();
-                System.out.println(String.format(
-                        "[%s] Executed %d queries (%d queries/s; %.2f/s dbs, successful statements: %2d%%). Threads shut down: %d.",
+                String logMessage = String.format(
+                        "[%s] Executed %d queries (%d queries/s; %.2f/s dbs, successful statements: %2d%%). " +
+                        "Threads shut down: %d. Queries that fetch all: %d (%.1f%%), queries that fetch none: %d (%.1f%%). Global unique queries: %d (%.1f%%)\n",
                         dateFormat.format(date), currentNrQueries, (int) throughput, throughputDbs,
-                        successfulStatementsRatio, threadsShutdown.get()));
+                        successfulStatementsRatio, threadsShutdown.get(),
+                        allCount, allPct, zeroCount, zeroPct, globalUniqueCount, globalUniquePct);
+
+                try {
+                    outputLogWriter.write(logMessage);
+                    outputLogWriter.flush();
+                } catch (IOException e) {
+                    e.printStackTrace();
+                }
+
                 timeMillis = System.currentTimeMillis();
                 lastNrQueries = currentNrQueries;
                 lastNrDbs = currentNrDbs;
@@ -816,4 +840,16 @@ public final class Main {
         }, 5, 5, TimeUnit.SECONDS);
     }
 
+    // Add shutdown hook to close the log writer
+    static {
+        Runtime.getRuntime().addShutdownHook(new Thread(() -> {
+            try {
+                if (outputLogWriter != null) {
+                    outputLogWriter.close();
+                }
+            } catch (IOException e) {
+                e.printStackTrace();
+            }
+        }));
+    }
 }

@@ -31,6 +31,16 @@ public class NoRECOracle<Z extends Select<J, E, T, C>, J extends Join<E, T, C>, 
     private Reproducer<G> reproducer;
     private String lastQueryString;
 
+    // Static counters for query statistics
+    public static int zeroCountQueries = 0;
+    public static int allRecordsCountQueries = 0;
+    public static int globalUniqueQueries = 0;
+    public static final java.util.concurrent.ConcurrentHashMap<String, Boolean> queryHistory = new java.util.concurrent.ConcurrentHashMap<>();
+    
+    // New static tracking for per-database statistics using seed value as identifier
+    private static final java.util.concurrent.ConcurrentHashMap<Long, java.util.Set<String>> perDatabaseQueries = new java.util.concurrent.ConcurrentHashMap<>();
+    private static final java.util.concurrent.ConcurrentHashMap<Long, java.util.concurrent.atomic.AtomicInteger> perDatabaseValidQueries = new java.util.concurrent.ConcurrentHashMap<>();
+
     private static class NoRECReproducer<G extends SQLGlobalState<?, ?>> implements Reproducer<G> {
         private final Function<G, Integer> optimizedQuery;
         private final Function<G, Integer> unoptimizedQuery;
@@ -90,6 +100,9 @@ public class NoRECOracle<Z extends Select<J, E, T, C>, J extends Join<E, T, C>, 
             throw new IgnoreMeException();
         }
 
+        // Query statistics tracking
+        getQueryStatistics(targetTables, state, unoptimizedQueryString, optimizedQueryString);
+
         if (unoptimizedCount != optimizedCount) {
             Function<G, Integer> optimizedQuery = state -> shouldUseAggregate
                     ? extractCounts(optimizedQueryString, errors, state)
@@ -108,6 +121,153 @@ public class NoRECOracle<Z extends Select<J, E, T, C>, J extends Join<E, T, C>, 
                     unoptimizedCount, firstQueryStringWithCount, secondQueryStringWithCount);
             throw new AssertionError(assertionMessage);
         }
+    }
+
+    private void getQueryStatistics(AbstractTables<T, C> targetTables, SQLGlobalState<?, ?> state, String unoptimizedQueryString, String optimizedQueryString) {
+        // Keep existing tracking
+        trackDuplicateQuery(state, unoptimizedQueryString);
+        trackFetchAllNone(targetTables, state, optimizedQueryString);
+        
+        // Add per-database tracking using seed value as identifier
+        long seedValue = state.getState().getSeedValue();
+        
+        // Initialize tracking for new database
+        perDatabaseQueries.computeIfAbsent(seedValue, k -> 
+            java.util.Collections.newSetFromMap(new java.util.concurrent.ConcurrentHashMap<>()));
+        perDatabaseValidQueries.computeIfAbsent(seedValue, k -> 
+            new java.util.concurrent.atomic.AtomicInteger(0));
+        
+        // Track unique queries for this database
+        perDatabaseQueries.get(seedValue).add(unoptimizedQueryString);
+        
+        // Increment valid query count
+        perDatabaseValidQueries.get(seedValue).incrementAndGet();
+    }
+
+    // New method to log database statistics when database is completed/reset
+    public static void logDatabaseStatistics(String dbName, long seedValue) {
+        if (!perDatabaseQueries.containsKey(seedValue)) {
+            return;
+        }
+
+        int uniqueQueries = perDatabaseQueries.get(seedValue).size();
+        int validQueries = perDatabaseValidQueries.get(seedValue).get();
+        double uniqueRate = validQueries > 0 ? (double) uniqueQueries / validQueries : 0.0;
+
+        String logEntry = String.format("[%s] Database: %s (Seed: %d)\n" +
+                "Unique queries: %d\n" +
+                "Valid queries: %d\n" +
+                "Unique rate: %.4f\n\n",
+                java.time.LocalDateTime.now(), dbName, seedValue,
+                uniqueQueries, validQueries, uniqueRate);
+
+        try {
+            java.nio.file.Files.write(
+                java.nio.file.Paths.get("./logs/database_query_statistics.log"),
+                logEntry.getBytes(),
+                java.nio.file.StandardOpenOption.CREATE,
+                java.nio.file.StandardOpenOption.APPEND
+            );
+        } catch (Exception e) {
+            // Ignore file writing errors
+        }
+
+        // Clean up the maps to free memory
+        perDatabaseQueries.remove(seedValue);
+        perDatabaseValidQueries.remove(seedValue);
+    }
+
+    // Method to get current unique rates for all active databases
+    public static double[] getCurrentUniqueRates() {
+        return perDatabaseQueries.keySet().stream()
+            .mapToDouble(seedValue -> {
+                int uniqueQueries = perDatabaseQueries.get(seedValue).size();
+                int validQueries = perDatabaseValidQueries.get(seedValue).get();
+                return validQueries > 0 ? (double) uniqueQueries / validQueries : 0.0;
+            })
+            .toArray();
+    }
+
+    private void trackDuplicateQuery(SQLGlobalState<?, ?> state, String unoptimizedQueryString) {
+        String dbStateKey = state.getDatabaseName() + ":" + unoptimizedQueryString;
+        if (queryHistory.putIfAbsent(dbStateKey, Boolean.TRUE) == null) {
+        	globalUniqueQueries++;
+        }
+    }
+
+    private void trackFetchAllNone(AbstractTables<T, C> targetTables, SQLGlobalState<?, ?> state, String optimizedQueryString) {
+    	// Compare SELECT COUNT(*) FROM <table> WHERE <conditions> were compared to SELECT COUNT(*) FROM <table>.
+    	// 1. Get record count from target tables and where clause from optimized query (SELECT COUNT(*) FROM <table> WHERE <clause>)
+    	int derivedCount = 0;
+    	int fromIndex = optimizedQueryString.toUpperCase().indexOf("FROM");
+    	int toIndex = optimizedQueryString.toUpperCase().indexOf("ORDER BY"); // drop ORDER BY clause if exists
+    	String derivedQuery = "SELECT COUNT(*) " + optimizedQueryString.substring(fromIndex, toIndex == -1 ? optimizedQueryString.length() : toIndex);
+    	
+        SQLQueryAdapter q = new SQLQueryAdapter(derivedQuery, errors, false, false);
+        try (SQLancerResultSet rs = q.executeAndGet(state)) {
+            if (rs != null && rs.next()) {
+                derivedCount = rs.getInt(1);
+            }
+        } catch (Exception e) {
+            // If error occurs, leave derivedCount as 0
+        }
+    	
+    	
+    	// 2. Get total record count from all target tables (SELECT COUNT(*) FROM <table>)
+		int totalRecordCount = 0;
+		fromIndex = optimizedQueryString.toUpperCase().indexOf("FROM");
+		toIndex = optimizedQueryString.toUpperCase().indexOf("WHERE");
+		derivedQuery = "SELECT COUNT(*) " + optimizedQueryString.substring(fromIndex, toIndex == -1 ? optimizedQueryString.length() : toIndex);
+		
+		q = new SQLQueryAdapter(derivedQuery, errors, false, false);
+        try (SQLancerResultSet rs = q.executeAndGet(state)) {
+            if (rs != null && rs.next()) {
+            	totalRecordCount = rs.getInt(1);
+            }
+        } catch (Exception e) {
+            // If error occurs, leave derivedCount as 0
+        }
+		
+		
+		// 3. Compare
+		if (totalRecordCount != 0) {
+			if (derivedCount == 0) {
+				zeroCountQueries++;
+			} else if (derivedCount == totalRecordCount) {
+				allRecordsCountQueries++;
+			} else {
+				// Write query to another file in ./logs/aaa.txt using file writer
+				
+//				String logEntry = String.format("-- %s\n-- Seed: %d\nOutput count: %d, Total record count: %d\n%s\n\n", 
+//						java.time.LocalDateTime.now().toString(), 
+//						state.getState().getSeedValue(), 
+//						derivedCount, totalRecordCount,
+//						optimizedQueryString + ";");
+//				try {
+//					java.nio.file.Files.write(java.nio.file.Paths.get("./logs/duckdb_interesting-queries.sql"), logEntry.getBytes(), java.nio.file.StandardOpenOption.CREATE, java.nio.file.StandardOpenOption.APPEND);
+//				} catch (Exception e) {
+//					// Ignore file writing errors
+//				}
+			}
+		}
+    }
+
+    // Helper method to get total record count from all target tables
+    private int getTotalRecordCount(AbstractTables<T, C> targetTables, SQLGlobalState<?, ?> state) {
+        int total = 0;
+        for (T table : targetTables.getTables()) {
+            String tableName = table.getName();
+            String countQuery = "SELECT COUNT(*) FROM " + tableName;
+            SQLQueryAdapter q = new SQLQueryAdapter(countQuery, new ExpectedErrors(), false, false);
+            try (SQLancerResultSet rs = q.executeAndGet(state)) {
+                if (rs != null && rs.next()) {
+                    total += rs.getInt(1);
+                }
+            } catch (Exception e) {
+                // If error, skip this table
+            }
+        }
+        return total;
     }
 
     @Override

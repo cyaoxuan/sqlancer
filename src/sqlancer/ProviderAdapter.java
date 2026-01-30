@@ -72,6 +72,9 @@ public abstract class ProviderAdapter<G extends GlobalState<O, ? extends Abstrac
                 }
             }
         } finally {
+            // Log final statistics before closing
+            sqlancer.common.oracle.NoRECOracle.logDatabaseStatistics(globalState.getDatabaseName(), 
+                globalState.getState().getSeedValue());
             globalState.getConnection().close();
         }
         return null;
