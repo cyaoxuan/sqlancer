@@ -12,6 +12,7 @@ import sqlancer.common.ast.newast.Expression;
 import sqlancer.common.ast.newast.Join;
 import sqlancer.common.ast.newast.Select;
 import sqlancer.common.gen.TLPWhereGenerator;
+import sqlancer.common.genesisql.QueryPool;
 import sqlancer.common.genesisql.QueryPoolEntry;
 import sqlancer.common.query.ExpectedErrors;
 import sqlancer.common.schema.AbstractSchema;
@@ -129,9 +130,10 @@ public class TLPWhereOracle<Z extends Select<J, E, T, C>, J extends Join<E, T, C
     }
     
     @Override
-    public void initialiseQueryPool(G globalState) throws Exception {
+    public QueryPool initialiseQueryPool(G globalState) throws Exception {
         // Generate initial population of queries and add them to the global state
         // This uses the same logic as the check() method to generate random SELECT statements
+    	QueryPool queryPool = globalState.initializeQueryPool();
         int populationSize = globalState.getOptions().getGenesisqlPopulationSize();
         
         for (int i = 0; i < populationSize; i++) {
@@ -140,7 +142,7 @@ public class TLPWhereOracle<Z extends Select<J, E, T, C>, J extends Join<E, T, C
             // Regenerate if this query was already generated in this initialization
             int maxRetries = 10;
             int retryCount = 0;
-            while (globalState.getQueryPool().hasQueryBeenGenerated(selectStatement) && retryCount < maxRetries) {
+            while (queryPool.hasQueryBeenGenerated(selectStatement) && retryCount < maxRetries) {
                 selectStatement = generateSelectStatement();
                 retryCount++;
             }
@@ -148,16 +150,13 @@ public class TLPWhereOracle<Z extends Select<J, E, T, C>, J extends Join<E, T, C
             // Add to both global state pool and global HashMap tracking all generated queries
             if (!globalState.getQueryPool().hasQueryBeenGenerated(selectStatement)) {
                 QueryPoolEntry entry = new QueryPoolEntry(selectStatement, 0, 0);
-                globalState.getQueryPool().addQueryPoolEntry(entry);
-                globalState.getQueryPool().addToAllGeneratedQueries(selectStatement, entry);
+                queryPool.addQueryPoolEntry(entry);
             }
         }
+        
+        return queryPool;
     }
     
-    /**
-     * Generate a random SELECT statement for the query pool.
-     * This follows the same logic as the current check() method.
-     */
     // TODO: return Select instead of String, when QueryPoolEntry is updated to use Select
     private String generateSelectStatement() throws SQLException {
         S s = state.getSchema();
@@ -194,6 +193,7 @@ public class TLPWhereOracle<Z extends Select<J, E, T, C>, J extends Join<E, T, C
          performOracleValidation(entry, globalState);
          
          // TODO: merge these two steps into one if possible to avoid redundant query execution
+         // if IgnoreMeException is thrown during oracle validation, set fitness score to -1 since it is an invalid query
     }
     
     private int calculateFitnessScore(QueryPoolEntry entry, G globalState) throws Exception {
@@ -208,4 +208,14 @@ public class TLPWhereOracle<Z extends Select<J, E, T, C>, J extends Join<E, T, C
         // This should implement the TLP oracle logic to validate the query
     	// This can only be done when QueryPoolEntry uses Select instead of String for query representation
     }
+    
+    @Override
+	public QueryPoolEntry mutateQuery(QueryPoolEntry entry, G globalState) throws Exception {
+    	return null;
+    }
+    
+    @Override
+    public QueryPoolEntry crossoverQueries(QueryPoolEntry entry1, QueryPoolEntry entry2, G globalState) throws Exception {
+    	return null;
+	}
 }

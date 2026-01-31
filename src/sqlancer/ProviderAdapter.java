@@ -9,6 +9,7 @@ import java.util.stream.Collectors;
 
 import sqlancer.StateToReproduce.OracleRunReproductionState;
 import sqlancer.common.DBMSCommon;
+import sqlancer.common.genesisql.QueryPool;
 import sqlancer.common.genesisql.QueryPoolEntry;
 import sqlancer.common.oracle.CompositeTestOracle;
 import sqlancer.common.oracle.TestOracle;
@@ -270,8 +271,7 @@ public abstract class ProviderAdapter<G extends GlobalState<O, ? extends Abstrac
 			TestOracle<G> oracle = getTestOracle(globalState);
 
 			// GenesiSQL Step 2. Initialize query pool and HashMap to track unique queries
-			oracle.initialiseQueryPool(globalState);
-			globalState.getQueryPool().printQueryPool();
+			QueryPool queryPool = oracle.initialiseQueryPool(globalState);
 			Long totalExecutedQueries = 0L;
 			
 			// Outer loop: for each generation
@@ -282,7 +282,7 @@ public abstract class ProviderAdapter<G extends GlobalState<O, ? extends Abstrac
 				
 				// Inner loop: for each query in query pool
 				// GenesiSQL Step 3. Fitness Evaluation (with oracle validation)
-				for (QueryPoolEntry entry : globalState.getQueryPool().getQueryPool()) {
+				for (QueryPoolEntry entry : queryPool.getQueryPoolList()) {
 					if (totalExecutedQueries >= globalState.getOptions().getNrQueries()) {
 						break;
 					}
@@ -306,10 +306,23 @@ public abstract class ProviderAdapter<G extends GlobalState<O, ? extends Abstrac
 				
 				// GenesiSQL Step 4. Selection
 				int populationSize = globalState.getOptions().getGenesisqlPopulationSize();
-				globalState.getQueryPool().selectTopNQueries(populationSize);
+				queryPool.selectTopNQueries(populationSize);
 				
 				// GenesiSQL Step 5. Crossover and Mutation, and Step 6. Re-insertion
-				// TODO: Implement crossover, mutation, and re-insertion logic
+				// Arbitrary choice: increase population by up to 20% each generation
+				for (int i = 0; i < populationSize / 10; i++) {
+					QueryPoolEntry query1 = queryPool.getRandomQueryPoolEntry();
+					QueryPoolEntry mutatedQuery = oracle.mutateQuery(query1, globalState);
+					if (mutatedQuery != null) {
+						queryPool.addQueryPoolEntry(mutatedQuery);
+					}
+					
+					QueryPoolEntry query2 = queryPool.getRandomQueryPoolEntry();
+					QueryPoolEntry newQuery = oracle.crossoverQueries(query1,  query2, globalState);
+					if (newQuery != null) {
+						queryPool.addQueryPoolEntry(newQuery);
+					}
+				}
 			}
 		} finally {
 			globalState.getConnection().close();

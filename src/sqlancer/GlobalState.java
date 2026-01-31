@@ -84,11 +84,12 @@ public abstract class GlobalState<O extends DBMSSpecificOptions<?>, S extends Ab
         this.databaseName = databaseName;
     }
     
+    public QueryPool initializeQueryPool() {
+		this.queryPool = new QueryPool();
+		return this.queryPool;
+	}
+    
     public QueryPool getQueryPool() {
-    	if (queryPool == null) {
-    		queryPool = new QueryPool();
-    	}
-    	
         return queryPool;
     }
 
