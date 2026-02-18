@@ -19,12 +19,12 @@ public class QueryPool {
 	}
 	
 	public void addQueryPoolEntry(QueryPoolEntry entry) {
-		if (hasQueryBeenGenerated(entry.getQuery())) {
+		if (hasQueryBeenGenerated(entry.getQuery().asString())) {
 			return;
 		}
 		
 		this.queryPoolList.add(entry);
-		this.allGeneratedQueries.put(entry.getQuery(), entry);
+		this.allGeneratedQueries.put(entry.getQuery().asString(), entry);
 	}
 	
 	public void removeQueryPoolEntry(int index) {

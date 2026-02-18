@@ -19,6 +19,7 @@ import sqlancer.common.schema.AbstractSchema;
 import sqlancer.common.schema.AbstractTable;
 import sqlancer.common.schema.AbstractTableColumn;
 import sqlancer.common.schema.AbstractTables;
+import sqlancer.duckdb.ast.DuckDBSelect;
 
 public class TLPWhereOracle<Z extends Select<J, E, T, C>, J extends Join<E, T, C>, E extends Expression<C>, S extends AbstractSchema<?, T>, T extends AbstractTable<C, ?, ?>, C extends AbstractTableColumn<?, ?>, G extends SQLGlobalState<?, S>>
         implements TestOracle<G> {
@@ -133,22 +134,22 @@ public class TLPWhereOracle<Z extends Select<J, E, T, C>, J extends Join<E, T, C
     public QueryPool initialiseQueryPool(G globalState) throws Exception {
         // Generate initial population of queries and add them to the global state
         // This uses the same logic as the check() method to generate random SELECT statements
-    	QueryPool queryPool = globalState.initializeQueryPool();
+    	QueryPool queryPool = new QueryPool();
         int populationSize = globalState.getOptions().getGenesisqlPopulationSize();
         
         for (int i = 0; i < populationSize; i++) {
-            String selectStatement = generateSelectStatement();
+            DuckDBSelect selectStatement = generateSelectStatement();
             
             // Regenerate if this query was already generated in this initialization
             int maxRetries = 10;
             int retryCount = 0;
-            while (queryPool.hasQueryBeenGenerated(selectStatement) && retryCount < maxRetries) {
+            while (queryPool.hasQueryBeenGenerated(selectStatement.asString()) && retryCount < maxRetries) {
                 selectStatement = generateSelectStatement();
                 retryCount++;
             }
             
-            // Add to both global state pool and global HashMap tracking all generated queries
-            if (!globalState.getQueryPool().hasQueryBeenGenerated(selectStatement)) {
+            // Add to query pool
+            if (!queryPool.hasQueryBeenGenerated(selectStatement.asString())) {
                 QueryPoolEntry entry = new QueryPoolEntry(selectStatement, 0, 0);
                 queryPool.addQueryPoolEntry(entry);
             }
@@ -157,13 +158,12 @@ public class TLPWhereOracle<Z extends Select<J, E, T, C>, J extends Join<E, T, C
         return queryPool;
     }
     
-    // TODO: return Select instead of String, when QueryPoolEntry is updated to use Select
-    private String generateSelectStatement() throws SQLException {
+    private DuckDBSelect generateSelectStatement() throws SQLException {
         S s = state.getSchema();
         AbstractTables<T, C> targetTables = TestOracleUtils.getRandomTableNonEmptyTables(s);
         gen = gen.setTablesAndColumns(targetTables);
 
-        Select<J, E, T, C> select = gen.generateSelect();
+        Z select = gen.generateSelect();
 
         boolean shouldCreateDummy = true;
         select.setFetchColumns(gen.generateFetchColumns(shouldCreateDummy));
@@ -180,7 +180,7 @@ public class TLPWhereOracle<Z extends Select<J, E, T, C>, J extends Join<E, T, C
                 gen.generateBooleanExpression());
         select.setWhereClause(predicates.predicate);
 
-        return select.asString();
+        return (DuckDBSelect) select;
     }
 
     @Override
@@ -190,10 +190,10 @@ public class TLPWhereOracle<Z extends Select<J, E, T, C>, J extends Join<E, T, C
         entry.setFitnessScore(fitnessScore);
         
         // Step 3b: Run oracle validation on the query (TLP oracle logic)
-         performOracleValidation(entry, globalState);
+        performOracleValidation(entry, globalState);
          
-         // TODO: merge these two steps into one if possible to avoid redundant query execution
-         // if IgnoreMeException is thrown during oracle validation, set fitness score to -1 since it is an invalid query
+        // TODO: merge these two steps into one if possible to avoid redundant query execution
+        // if IgnoreMeException is thrown during oracle validation, set fitness score to -1 since it is an invalid query
     }
     
     private int calculateFitnessScore(QueryPoolEntry entry, G globalState) throws Exception {
@@ -204,9 +204,41 @@ public class TLPWhereOracle<Z extends Select<J, E, T, C>, J extends Join<E, T, C
     }
     
     private void performOracleValidation(QueryPoolEntry entry, G globalState) throws SQLException {
-    	// TODO
-        // This should implement the TLP oracle logic to validate the query
-    	// This can only be done when QueryPoolEntry uses Select instead of String for query representation
+    	@SuppressWarnings("unchecked")
+		Select<J, E, T, C> select = (Select<J, E, T, C>)  entry.getQuery();
+    	
+    	select.setFetchColumns(gen.generateFetchColumns(true));
+    	select.setJoinClauses(gen.getRandomJoinClauses());
+    	select.setFromList(gen.getTableRefs());
+    	select.setWhereClause(null);
+
+    	String originalQueryString = select.asString();
+    	List<String> firstResultSet = ComparatorHelper.getResultSetFirstColumnAsString(originalQueryString, errors,
+    			state);
+
+    	boolean orderBy = Randomly.getBooleanWithSmallProbability();
+    	if (orderBy) {
+    		select.setOrderByClauses(gen.generateOrderBys());
+    	}
+
+    	TestOracleUtils.PredicateVariants<E, C> predicates = TestOracleUtils.initializeTernaryPredicateVariants(gen,
+    			gen.generateBooleanExpression());
+    	select.setWhereClause(predicates.predicate);
+    	String firstQueryString = select.asString();
+    	select.setWhereClause(predicates.negatedPredicate);
+    	String secondQueryString = select.asString();
+    	select.setWhereClause(predicates.isNullPredicate);
+    	String thirdQueryString = select.asString();
+
+    	List<String> combinedString = new ArrayList<>();
+    	List<String> secondResultSet = ComparatorHelper.getCombinedResultSet(firstQueryString, secondQueryString,
+    			thirdQueryString, combinedString, !orderBy, state, errors);
+
+    	ComparatorHelper.assumeResultSetsAreEqual(firstResultSet, secondResultSet, originalQueryString, combinedString,
+    			state);
+    	
+    	reproducer = new TLPWhereReproducer(firstQueryString, secondQueryString, thirdQueryString, originalQueryString,
+                firstResultSet, orderBy);
     }
     
     @Override

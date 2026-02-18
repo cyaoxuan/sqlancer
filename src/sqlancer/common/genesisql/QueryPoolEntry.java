@@ -1,19 +1,19 @@
 package sqlancer.common.genesisql;
 
-//import sqlancer.common.query.Query;
+import sqlancer.duckdb.ast.DuckDBSelect;
 
 public class QueryPoolEntry {
-	private final String query; // temporary representation, should change it to Select so that we can use the AST to manipulate queries
+	private final DuckDBSelect query; // should be generic Select in future
 	private int fitnessScore;
 	private final int generation;
 
-	public QueryPoolEntry(String query, int fitnessScore, int generation) {
+	public QueryPoolEntry(DuckDBSelect query, int fitnessScore, int generation) {
 		this.query = query;
 		this.fitnessScore = fitnessScore;
 		this.generation = generation;
 	}
 
-	public String getQuery() {
+	public DuckDBSelect getQuery() {
 		return query;
 	}
 
@@ -31,6 +31,6 @@ public class QueryPoolEntry {
 	
 	@Override
 	public String toString() {
-		return "Query: " + query + ", Fitness Score: " + fitnessScore + ", Generation: " + generation;
+		return "Query: " + query.asString() + ", Fitness Score: " + fitnessScore + ", Generation: " + generation;
 	}
 }
